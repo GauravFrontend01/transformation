@@ -7,11 +7,12 @@ import CodeView from "../components/CodeView.jsx";
 import { generate } from "../api.js";
 import { isMapped } from "../lib/mapping.js";
 
-const ACCENTS = ["#7c3aed", "#0ea5e9", "#f97316"];
+const ACCENTS = ["#1d3557", "#7a5530", "#3f6b3a"];
 
 export default function StudioPage() {
   const { sources, output, transforms, mappings, setMappings, replaceSource, replaceOutput, error } = useOutletContext();
   const [code, setCode] = useState("");
+  const [preview, setPreview] = useState(null);
   const [generating, setGenerating] = useState(false);
   const [localError, setLocalError] = useState("");
 
@@ -52,8 +53,9 @@ export default function StudioPage() {
         outputKeys: output.keys,
         mappings,
       };
-      const { code } = await generate(payload);
-      setCode(code);
+      const res = await generate(payload);
+      setCode(res.code);
+      setPreview(res.preview || null);
     } catch (err) {
       setLocalError(err.message);
     } finally {
@@ -62,20 +64,30 @@ export default function StudioPage() {
   }
 
   return (
-    <div className="app">
-      <header className="hero">
-        <div>
-          <h1>Transformation Studio</h1>
-          <p className="hero__sub">Match source fields to your output schema. Get a clean <code>transform()</code> function you can drop into any loop.</p>
-        </div>
-        <div className="hero__stats">
-          <div><strong>{sources.length}</strong><span>sources</span></div>
-          <div><strong>{output?.keys.length || 0}</strong><span>output keys</span></div>
-          <div><strong>{mappedCount}</strong><span>mapped</span></div>
-        </div>
+    <div className="match">
+      <header className="match__hero">
+        <p className="match__eyebrow">Studio · table view</p>
+        <h1 className="match__title">
+          Transformation <span className="match__title-em">Studio.</span>
+        </h1>
+        <p className="match__sub">
+          Match source fields to your output schema. Get a clean <code>transform()</code> function you can drop into any loop.
+        </p>
       </header>
 
-      {(error || localError) && <div className="banner banner--error">{error || localError}</div>}
+      <div className="studio__stats">
+        <div className="match__count">
+          <strong>{sources.length}</strong> <span>source{sources.length === 1 ? "" : "s"}</span>
+        </div>
+        <div className="match__count">
+          <strong>{output?.keys.length || 0}</strong> <span>output keys</span>
+        </div>
+        <div className="match__count">
+          <strong>{mappedCount}</strong> <span>mapped</span>
+        </div>
+      </div>
+
+      {(error || localError) && <div className="match__banner">{error || localError}</div>}
 
       <section className="panels">
         <div className="panels__sources">
@@ -98,28 +110,60 @@ export default function StudioPage() {
           onAutoMatch={autoMatch}
           onClear={() => setMappings({})}
         />
-        <div className="generate-bar">
-          <span className="generate-bar__hint">
-            {mappedCount === 0
-              ? "Map at least one field to generate code."
-              : `${mappedCount} of ${output?.keys.length} keys mapped${mappedCount < (output?.keys.length || 0) ? " — unmapped keys default to null." : "."}`}
-          </span>
+        <div className="match__generate match__generate--inline">
           <button
-            className="btn btn--primary btn--lg"
+            className="lbtn lbtn--primary"
             disabled={mappedCount === 0 || generating}
             onClick={onGenerate}
           >
             {generating ? "Generating…" : "Generate code"}
           </button>
+          <span className="match__hint">
+            {mappedCount === 0
+              ? "Map at least one field to generate code."
+              : `${mappedCount} of ${output?.keys.length} keys mapped${mappedCount < (output?.keys.length || 0) ? " — unmapped keys default to null." : "."}`}
+          </span>
         </div>
       </section>
 
-      <section className="code-section">
-        <h2 className="section-title">Generated JavaScript</h2>
-        <CodeView code={code} />
-      </section>
+      {code && (
+        <section className="match__code">
+          <p className="match__eyebrow" style={{ marginBottom: 12 }}>Generated JavaScript</p>
+          <CodeView code={code} filename="transform.js" language="javascript" />
+        </section>
+      )}
 
-      <footer className="foot">Sources → Mapping → Code · runs locally · {new Date().getFullYear()}</footer>
+      {preview && code && (
+        <section className="match__output">
+          <div className="match__output-header">
+            <div>
+              <span className="match__output-title">Sample output</span>
+              {preview.records && (
+                <span className="match__output-sub">
+                  running <code>transform()</code> over the first {preview.records.length} record{preview.records.length === 1 ? "" : "s"}
+                  {preview.total > preview.records.length ? ` of ${preview.total}` : ""}
+                </span>
+              )}
+            </div>
+            {preview.records && (
+              <span className="match__output-meta">
+                {preview.records.filter((r) => r.ok).length}/{preview.records.length} ok
+              </span>
+            )}
+          </div>
+          {preview.error ? (
+            <div className="match__banner">Could not run transform: {preview.error}</div>
+          ) : (
+            <CodeView
+              code={JSON.stringify(preview.records.map((r) => (r.ok ? r.value : { __error: r.error })), null, 2)}
+              filename="sample-output.json"
+              language="json"
+            />
+          )}
+        </section>
+      )}
+
+      <footer className="match__foot">Sources → Mapping → Code · runs locally · {new Date().getFullYear()}</footer>
     </div>
   );
 }

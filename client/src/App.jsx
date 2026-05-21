@@ -1,13 +1,10 @@
 import React, { useEffect, useState } from "react";
-import { BrowserRouter, Routes, Route, Outlet, useLocation, NavLink, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Outlet, NavLink, Navigate } from "react-router-dom";
 import StudioPage from "./pages/StudioPage.jsx";
 import MatchPage from "./pages/MatchPage.jsx";
 import { fetchSamples, fetchTransforms, uploadFile } from "./api.js";
 
 function Layout() {
-  const location = useLocation();
-  const isLight = location.pathname.startsWith("/match");
-
   const [sources, setSources] = useState([]);
   const [output, setOutput] = useState(null);
   const [transforms, setTransforms] = useState([]);
@@ -55,7 +52,7 @@ function Layout() {
   }
 
   return (
-    <div className={isLight ? "theme-light" : "theme-dark"}>
+    <div className="theme-light">
       <nav className="topnav">
         <div className="topnav__inner">
           <span className="topnav__brand">

@@ -15,6 +15,11 @@ app.use(express.json({ limit: "5mb" }));
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
+// In-memory store of the full records per source id, used to preview outputs.
+// Populated by /api/samples and /api/parse; lost on server restart.
+const SOURCE_RECORDS = {};
+const PREVIEW_LIMIT = 5;
+
 // ---------- parsing helpers ----------
 
 function inferType(value) {
@@ -91,6 +96,7 @@ app.get("/api/samples", async (_req, res) => {
         const buf = await fs.readFile(path.join(SAMPLES_DIR, f.filename));
         const records = parseBuffer(f.filename, buf);
         if (f.role === "source") {
+          SOURCE_RECORDS[f.id] = records;
           return { ...f, ...describeRecords(records) };
         }
         return { ...f, ...describeOutputSchema(records) };
@@ -110,6 +116,7 @@ app.post("/api/parse", upload.single("file"), (req, res) => {
     const records = parseBuffer(req.file.originalname, req.file.buffer);
     const meta = { id: req.body.id || req.file.originalname, filename: req.file.originalname, label: req.body.label || req.file.originalname, role };
     if (role === "output") return res.json({ ...meta, ...describeOutputSchema(records) });
+    SOURCE_RECORDS[meta.id] = records;
     res.json({ ...meta, ...describeRecords(records) });
   } catch (err) {
     res.status(400).json({ error: String(err.message || err) });
@@ -119,20 +126,77 @@ app.post("/api/parse", upload.single("file"), (req, res) => {
 // ---------- code generation ----------
 
 const TRANSFORM_LIBRARY = {
-  identity: { label: "— none —", fn: "(v) => v" },
-  toUpperCase: { label: "UPPERCASE", fn: "(v) => (v == null ? v : String(v).toUpperCase())" },
-  toLowerCase: { label: "lowercase", fn: "(v) => (v == null ? v : String(v).toLowerCase())" },
-  trim: { label: "trim whitespace", fn: "(v) => (v == null ? v : String(v).trim())" },
-  toNumber: { label: "→ number", fn: "(v) => (v == null || v === '' ? null : Number(v))" },
-  toString: { label: "→ string", fn: "(v) => (v == null ? v : String(v))" },
-  toBoolean: { label: "→ boolean", fn: "(v) => v === true || v === 'true' || v === 1 || v === '1'" },
-  centsToDollars: { label: "cents → dollars", fn: "(v) => (v == null || v === '' ? null : Number(v) / 100)" },
-  isoDate: { label: "→ ISO date", fn: "(v) => (v == null || v === '' ? null : new Date(v).toISOString())" },
-  toDateOnly: { label: "→ YYYY-MM-DD", fn: "(v) => (v == null || v === '' ? null : new Date(v).toISOString().slice(0, 10))" },
+  identity: {
+    label: "— none —",
+    description: "Pass the value through unchanged.",
+    example: { in: "Ada", out: "Ada" },
+    fn: "(v) => v",
+  },
+  toUpperCase: {
+    label: "UPPERCASE",
+    description: "Force every letter to upper case.",
+    example: { in: "Ada Lovelace", out: "ADA LOVELACE" },
+    fn: "(v) => (v == null ? v : String(v).toUpperCase())",
+  },
+  toLowerCase: {
+    label: "lowercase",
+    description: "Force every letter to lower case.",
+    example: { in: "Ada Lovelace", out: "ada lovelace" },
+    fn: "(v) => (v == null ? v : String(v).toLowerCase())",
+  },
+  trim: {
+    label: "trim whitespace",
+    description: "Remove spaces from the beginning and end.",
+    example: { in: "  Ada  ", out: "Ada" },
+    fn: "(v) => (v == null ? v : String(v).trim())",
+  },
+  toNumber: {
+    label: "→ number",
+    description: "Parse the value as a number. Empty stays null.",
+    example: { in: "499900", out: 499900 },
+    fn: "(v) => (v == null || v === '' ? null : Number(v))",
+  },
+  toString: {
+    label: "→ string",
+    description: "Coerce any value to its string form.",
+    example: { in: 499900, out: "499900" },
+    fn: "(v) => (v == null ? v : String(v))",
+  },
+  toBoolean: {
+    label: "→ boolean",
+    description: "True for true, 'true', 1, or '1'. Everything else false.",
+    example: { in: "true", out: true },
+    fn: "(v) => v === true || v === 'true' || v === 1 || v === '1'",
+  },
+  centsToDollars: {
+    label: "cents → dollars",
+    description: "Divide by 100 (e.g. integer cents to a dollar amount).",
+    example: { in: 499900, out: 4999 },
+    fn: "(v) => (v == null || v === '' ? null : Number(v) / 100)",
+  },
+  isoDate: {
+    label: "→ ISO date",
+    description: "Parse the date and emit a full ISO 8601 timestamp.",
+    example: { in: "2025-01-04", out: "2025-01-04T00:00:00.000Z" },
+    fn: "(v) => (v == null || v === '' ? null : new Date(v).toISOString())",
+  },
+  toDateOnly: {
+    label: "→ YYYY-MM-DD",
+    description: "Parse the date and keep only the calendar portion.",
+    example: { in: "2025-01-04T11:20:00Z", out: "2025-01-04" },
+    fn: "(v) => (v == null || v === '' ? null : new Date(v).toISOString().slice(0, 10))",
+  },
 };
 
 app.get("/api/transforms", (_req, res) => {
-  res.json(Object.entries(TRANSFORM_LIBRARY).map(([id, { label }]) => ({ id, label })));
+  res.json(
+    Object.entries(TRANSFORM_LIBRARY).map(([id, m]) => ({
+      id,
+      label: m.label,
+      description: m.description,
+      example: m.example,
+    }))
+  );
 });
 
 function safeIdent(name) {
@@ -229,13 +293,48 @@ module.exports = { transform };
   return code;
 }
 
+function buildPreview(code, sources) {
+  try {
+    // The generated code is CommonJS — give it a fake `module` to capture the export.
+    const m = { exports: {} };
+    const compile = new Function("module", code);
+    compile(m);
+    const transform = m.exports.transform;
+    if (typeof transform !== "function") return { error: "Generated code did not export `transform`." };
+
+    const ids = sources.map((s) => s.id);
+    const lengths = ids.map((id) => SOURCE_RECORDS[id]?.length || 0);
+    const total = Math.max(0, ...lengths);
+    const n = Math.min(total, PREVIEW_LIMIT);
+
+    const records = [];
+    for (let i = 0; i < n; i++) {
+      const args = {};
+      for (const id of ids) {
+        // Use `{}` for missing records so property access doesn't crash.
+        args[id] = SOURCE_RECORDS[id]?.[i] || {};
+      }
+      try {
+        records.push({ ok: true, value: transform(args) });
+      } catch (err) {
+        records.push({ ok: false, error: String(err.message || err) });
+      }
+    }
+
+    return { records, total, shown: records.length, limit: PREVIEW_LIMIT };
+  } catch (err) {
+    return { error: String(err.message || err) };
+  }
+}
+
 app.post("/api/generate", (req, res) => {
   try {
     const { sources, outputKeys, mappings, constants } = req.body || {};
     if (!Array.isArray(sources) || !sources.length) return res.status(400).json({ error: "sources required" });
     if (!Array.isArray(outputKeys) || !outputKeys.length) return res.status(400).json({ error: "outputKeys required" });
     const code = generateCode({ sources, outputKeys, mappings: mappings || {}, constants: constants || {} });
-    res.json({ code });
+    const preview = buildPreview(code, sources);
+    res.json({ code, preview });
   } catch (err) {
     res.status(400).json({ error: String(err.message || err) });
   }

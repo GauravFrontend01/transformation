@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import CodeView from "../components/CodeView.jsx";
+import TransformPicker from "../components/TransformPicker.jsx";
 import { generate } from "../api.js";
 import {
   normalize,
@@ -9,6 +10,13 @@ import {
   listConnections,
   setSeparator as setSep,
 } from "../lib/mapping.js";
+
+function sampleFor(sources, sourceId, field) {
+  const s = sources.find((x) => x.id === sourceId);
+  if (!s) return undefined;
+  const f = s.fields.find((x) => x.name === field);
+  return f?.sample;
+}
 
 function bezier(a, b) {
   const dx = Math.max(60, Math.abs(b.x - a.x) * 0.45);
@@ -26,6 +34,7 @@ export default function MatchPage() {
   const [positions, setPositions] = useState({});
   const [hoverConn, setHoverConn] = useState(null);
   const [code, setCode] = useState("");
+  const [preview, setPreview] = useState(null);
   const [generating, setGenerating] = useState(false);
   const [localError, setLocalError] = useState("");
 
@@ -165,12 +174,13 @@ export default function MatchPage() {
     setLocalError("");
     setGenerating(true);
     try {
-      const { code } = await generate({
+      const res = await generate({
         sources: sources.map((s) => ({ id: s.id, label: s.label })),
         outputKeys: output.keys,
         mappings,
       });
-      setCode(code);
+      setCode(res.code);
+      setPreview(res.preview || null);
     } catch (err) {
       setLocalError(err.message);
     } finally {
@@ -311,11 +321,61 @@ export default function MatchPage() {
 
       {code && (
         <div className="match__code">
-          <CodeView code={code} />
+          <CodeView code={code} filename="transform.js" language="javascript" />
         </div>
       )}
 
+      {preview && (
+        <PreviewPanel preview={preview} />
+      )}
+
       <footer className="match__foot">An honest little worksheet.</footer>
+    </div>
+  );
+}
+
+function PreviewPanel({ preview }) {
+  if (preview.error) {
+    return (
+      <div className="match__output">
+        <div className="match__output-header">
+          <span className="match__output-title">Sample output</span>
+          <span className="match__output-meta match__output-meta--error">couldn't run · {preview.error}</span>
+        </div>
+      </div>
+    );
+  }
+  const records = preview.records || [];
+  if (records.length === 0) {
+    return (
+      <div className="match__output">
+        <div className="match__output-header">
+          <span className="match__output-title">Sample output</span>
+          <span className="match__output-meta">no source records available to preview</span>
+        </div>
+      </div>
+    );
+  }
+
+  // Show the successful values as a clean JSON array; surface row-level errors inline.
+  const values = records.map((r) => (r.ok ? r.value : { __error: r.error }));
+  const okCount = records.filter((r) => r.ok).length;
+  const json = JSON.stringify(values, null, 2);
+
+  return (
+    <div className="match__output">
+      <div className="match__output-header">
+        <div>
+          <span className="match__output-title">Sample output</span>
+          <span className="match__output-sub">
+            running <code>transform()</code> over the first {records.length} record{records.length === 1 ? "" : "s"}
+            {preview.total > records.length ? ` of ${preview.total}` : ""}
+            {okCount < records.length ? ` · ${records.length - okCount} errored` : ""}
+          </span>
+        </div>
+        <span className="match__output-meta">{okCount}/{records.length} ok</span>
+      </div>
+      <CodeView code={json} filename="sample-output.json" language="json" />
     </div>
   );
 }
@@ -430,20 +490,18 @@ function OutputGroup({ output, transforms, mappings, sources, setInputTransform,
 
                 {inputs.map((inp) => {
                   const src = sources.find((s) => s.id === inp.sourceId);
+                  const sample = sampleFor(sources, inp.sourceId, inp.field);
                   return (
                     <div key={`${inp.sourceId}|${inp.field}`} className="match__row-meta">
                       <span className="match__row-from">
                         from <em>{src?.label || inp.sourceId}</em>.<code>{inp.field}</code>
                       </span>
-                      <select
-                        className="match__tx"
+                      <TransformPicker
                         value={inp.transform || "identity"}
-                        onChange={(e) => setInputTransform(k.name, inp.sourceId, inp.field, e.target.value)}
-                      >
-                        {transforms.map((t) => (
-                          <option key={t.id} value={t.id}>{t.label}</option>
-                        ))}
-                      </select>
+                        onChange={(t) => setInputTransform(k.name, inp.sourceId, inp.field, t)}
+                        sampleValue={sample}
+                        options={transforms}
+                      />
                       <button className="match__cut" onClick={() => cut(k.name, inp.sourceId, inp.field)} title="Cut thread">×</button>
                     </div>
                   );
