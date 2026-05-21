@@ -1,0 +1,5 @@
+order_id,user_id,product_id,amount_cents,status,placed_at
+ord_1001,u_001,p_42,499900,paid,2025-01-04T11:20:00Z
+ord_1002,u_002,p_17,129900,refunded,2025-01-06T15:33:00Z
+ord_1003,u_003,p_42,499900,paid,2025-01-08T09:01:00Z
+ord_1004,u_001,p_88,79900,paid,2025-02-11T22:18:00Z

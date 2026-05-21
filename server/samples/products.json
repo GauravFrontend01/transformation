@@ -1,0 +1,5 @@
+[
+  { "product_id": "p_42", "title": "Mechanical Keyboard", "category": "peripherals", "price_cents": 499900 },
+  { "product_id": "p_17", "title": "Ultrawide Monitor", "category": "displays", "price_cents": 129900 },
+  { "product_id": "p_88", "title": "USB-C Hub", "category": "peripherals", "price_cents": 79900 }
+]

@@ -1,0 +1,26 @@
+[
+  {
+    "id": "u_001",
+    "first_name": "Ada",
+    "last_name": "Lovelace",
+    "email": "ada@analytical.engine",
+    "signup_date": "2024-03-12T09:14:00Z",
+    "country": "GB"
+  },
+  {
+    "id": "u_002",
+    "first_name": "Grace",
+    "last_name": "Hopper",
+    "email": "grace@navy.mil",
+    "signup_date": "2024-05-30T17:42:00Z",
+    "country": "US"
+  },
+  {
+    "id": "u_003",
+    "first_name": "Alan",
+    "last_name": "Turing",
+    "email": "alan@bletchley.uk",
+    "signup_date": "2024-06-23T08:00:00Z",
+    "country": "GB"
+  }
+]
