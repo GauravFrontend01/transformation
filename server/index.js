@@ -227,8 +227,86 @@ function inputExpr(input, sourceVars) {
   return `transforms.${input.transform}(${acc})`;
 }
 
-function generateCode({ sources, outputKeys, mappings, constants = {} }) {
+function cleanIdentifier(value) {
+  return String(value || "value").replace(/[^A-Za-z0-9_$]/g, "_");
+}
+
+function makeIndexName(sourceId, field) {
+  const suffix = cleanIdentifier(field)
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join("") || "Key";
+  return `${cleanIdentifier(sourceId)}By${suffix}`;
+}
+
+function validMatchRules(matchRules, sourceVars, primarySourceId) {
+  const ids = new Set(sourceVars);
+  return (Array.isArray(matchRules) ? matchRules : []).filter(
+    (rule) =>
+      rule &&
+      ids.has(rule.sourceId) &&
+      ids.has(rule.targetSourceId || primarySourceId) &&
+      rule.sourceId !== primarySourceId &&
+      (rule.targetSourceId || primarySourceId) === primarySourceId &&
+      rule.sourceField &&
+      rule.targetField
+  );
+}
+
+function generateTransformAll({ sources, primarySourceId, matchRules }) {
   const sourceVars = sources.map((s) => s.id);
+  if (!primarySourceId || !sourceVars.includes(primarySourceId)) return "";
+
+  const rowDecls = sourceVars
+    .map((id) => `  const ${id}Rows = Array.isArray(${id}) ? ${id} : [];`)
+    .join("\n");
+  const rules = validMatchRules(matchRules, sourceVars, primarySourceId);
+  const ruleBySource = new Map(rules.map((rule) => [rule.sourceId, rule]));
+
+  const indexes = rules
+    .map((rule) => `  const ${makeIndexName(rule.sourceId, rule.sourceField)} = indexBy(${rule.sourceId}Rows, ${JSON.stringify(rule.sourceField)});`)
+    .join("\n");
+
+  const perSourceRows = sourceVars
+    .map((id) => {
+      if (id === primarySourceId) return `    ${id}: ${id}Row`;
+      const rule = ruleBySource.get(id);
+      if (!rule) return `    ${id}: ${id}Rows[index] || {}`;
+      const indexName = makeIndexName(rule.sourceId, rule.sourceField);
+      return `    ${id}: ${indexName}.get(${accessor(`${primarySourceId}Row`, rule.targetField)}) || {}`;
+    })
+    .join(",\n");
+
+  return `
+function indexBy(rows, key) {
+  const index = new Map();
+  for (const row of rows || []) {
+    if (!row) continue;
+    const value = row[key];
+    if (value !== undefined && value !== null && !index.has(value)) {
+      index.set(value, row);
+    }
+  }
+  return index;
+}
+
+function transformAll({ ${sourceVars.map((id) => `${id} = []`).join(", ")} } = {}) {
+${rowDecls}
+${indexes ? `${indexes}\n` : ""}  return ${primarySourceId}Rows.map((${primarySourceId}Row, index) => transform({
+${perSourceRows}
+  }));
+}
+`;
+}
+
+function generateCode({ sources, outputKeys, mappings, constants = {}, primarySourceId = "", matchRules = [] }) {
+  const sourceVars = sources.map((s) => s.id);
+  const transformAllBlock = generateTransformAll({ sources, primarySourceId, matchRules });
+  const exportNames = transformAllBlock ? "{ transform, transformAll }" : "{ transform }";
+  const usageBlock = transformAllBlock
+    ? `// Usage with matched full datasets:\n//   const { transformAll } = require('./transform');\n//   const rows = transformAll({ ${sourceVars.join(", ")} });\n//\n// Usage for a single already-matched record set:\n//   const { transform } = require('./transform');\n//   const row = transform({ ${sourceVars.map((v) => `${v}: ${v}Record`).join(", ")} });`
+    : `// Usage:\n//   const { transform } = require('./transform');\n//   for (let i = 0; i < orders.length; i++) {\n//     const out = transform({ ${sourceVars.map((v) => `${v}: ${v}List[i]`).join(", ")} });\n//     // ...write 'out' wherever you need it\n//   }`;
 
   const usedTransforms = new Set();
   for (const k of outputKeys) {
@@ -269,25 +347,19 @@ function generateCode({ sources, outputKeys, mappings, constants = {} }) {
 
   const paramsList = sourceVars.join(", ");
 
-  const code = `// Auto-generated transform — drop into your loop.
-// Each call produces ONE output record from ONE record per source.
-//
-// Usage:
-//   const { transform } = require('./transform');
-//   for (let i = 0; i < orders.length; i++) {
-//     const out = transform({ ${sourceVars.map((v) => `${v}: ${v}List[i]`).join(", ")} });
-//     // ...write 'out' wherever you need it
-//   }
+  const code = `// Auto-generated transform.
+${usageBlock}
 
 ${transformBlock}function transform({ ${paramsList} } = {}) {
   return {
 ${bodyLines.join("\n")}
   };
 }
+${transformAllBlock}
 
 // CommonJS export (works in Node .js files by default).
-// For ESM, rename to .mjs and change the next line to: export { transform };
-module.exports = { transform };
+// For ESM, rename to .mjs and change the next line to: export ${exportNames};
+module.exports = ${exportNames};
 `;
 
   return code;
@@ -301,6 +373,20 @@ function buildPreview(code, sources) {
     compile(m);
     const transform = m.exports.transform;
     if (typeof transform !== "function") return { error: "Generated code did not export `transform`." };
+
+    if (typeof m.exports.transformAll === "function") {
+      const args = {};
+      for (const s of sources) args[s.id] = SOURCE_RECORDS[s.id] || [];
+      const values = m.exports.transformAll(args);
+      if (!Array.isArray(values)) return { error: "`transformAll` did not return an array." };
+      const n = Math.min(values.length, PREVIEW_LIMIT);
+      return {
+        records: values.slice(0, n).map((value) => ({ ok: true, value })),
+        total: values.length,
+        shown: n,
+        limit: PREVIEW_LIMIT,
+      };
+    }
 
     const ids = sources.map((s) => s.id);
     const lengths = ids.map((id) => SOURCE_RECORDS[id]?.length || 0);
@@ -329,10 +415,17 @@ function buildPreview(code, sources) {
 
 app.post("/api/generate", (req, res) => {
   try {
-    const { sources, outputKeys, mappings, constants } = req.body || {};
+    const { sources, outputKeys, mappings, constants, primarySourceId, matchRules } = req.body || {};
     if (!Array.isArray(sources) || !sources.length) return res.status(400).json({ error: "sources required" });
     if (!Array.isArray(outputKeys) || !outputKeys.length) return res.status(400).json({ error: "outputKeys required" });
-    const code = generateCode({ sources, outputKeys, mappings: mappings || {}, constants: constants || {} });
+    const code = generateCode({
+      sources,
+      outputKeys,
+      mappings: mappings || {},
+      constants: constants || {},
+      primarySourceId,
+      matchRules,
+    });
     const preview = buildPreview(code, sources);
     res.json({ code, preview });
   } catch (err) {

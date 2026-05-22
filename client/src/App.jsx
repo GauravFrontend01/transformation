@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { BrowserRouter, Routes, Route, Outlet, NavLink, Navigate } from "react-router-dom";
 import StudioPage from "./pages/StudioPage.jsx";
 import MatchPage from "./pages/MatchPage.jsx";
+import TransformWorkbenchPage from "./pages/TransformWorkbenchPage.jsx";
 import { fetchSamples, fetchTransforms, uploadFile } from "./api.js";
 
 function Layout() {
@@ -65,6 +66,9 @@ function Layout() {
             <NavLink to="/match" className={({ isActive }) => "topnav__tab" + (isActive ? " is-active" : "")}>
               Match the following
             </NavLink>
+            <NavLink to="/transform" className={({ isActive }) => "topnav__tab" + (isActive ? " is-active" : "")}>
+              Transform
+            </NavLink>
           </div>
         </div>
       </nav>
@@ -96,6 +100,7 @@ export default function App() {
         <Route element={<Layout />}>
           <Route index element={<StudioPage />} />
           <Route path="match" element={<MatchPage />} />
+          <Route path="transform" element={<TransformWorkbenchPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>

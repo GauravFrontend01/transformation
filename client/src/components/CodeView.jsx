@@ -12,6 +12,7 @@ const MIME = {
 export default function CodeView({ code, filename = "transform.js", language = "javascript" }) {
   const ref = useRef(null);
   const [copied, setCopied] = useState(false);
+  const extension = filename.includes(".") ? filename.split(".").pop() : language;
 
   useEffect(() => {
     if (ref.current) Prism.highlightElement(ref.current);
@@ -51,7 +52,7 @@ export default function CodeView({ code, filename = "transform.js", language = "
         <span className="code__filename">{filename}</span>
         <div className="code__actions">
           <button className="btn btn--ghost" onClick={copy}>{copied ? "Copied!" : "Copy"}</button>
-          <button className="btn btn--primary" onClick={download}>Download .js</button>
+          <button className="btn btn--primary" onClick={download}>Download .{extension}</button>
         </div>
       </div>
       <pre className="code__pre"><code ref={ref} className={`language-${language}`}>{code}</code></pre>
